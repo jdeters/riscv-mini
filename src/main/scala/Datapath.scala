@@ -21,7 +21,8 @@ class DatapathIO(implicit p: Parameters) extends CoreBundle()(p) {
 class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val io      = IO(new DatapathIO)
   val csr     = Module(new CSR)
-  val regFile = Module(new RegFile) 
+  val regFile = Module(new RegFile)
+  val instCounts = Module(new InstructionCounters)
   val alu     = p(BuildALU)(p)
   val immGen  = p(BuildImmGen)(p)
   val brCond  = p(BuildBrCond)(p)
@@ -33,7 +34,7 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val fe_pc   = Reg(UInt())
 
   /***** Execute / Write Back Registers *****/
-  val ew_inst = RegInit(Instructions.NOP) 
+  val ew_inst = RegInit(Instructions.NOP)
   val ew_pc   = Reg(UInt())
   val ew_alu  = Reg(UInt())
   val csr_in  = Reg(UInt())
@@ -46,7 +47,7 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val csr_cmd  = Reg(io.ctrl.csr_cmd.cloneType)
   val illegal  = Reg(Bool())
   val pc_check = Reg(Bool())
- 
+
   /****** Fetch *****/
   val started = RegNext(reset.toBool)
   val stall = !io.icache.resp.valid || !io.dcache.resp.valid
@@ -56,13 +57,13 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
              Mux(io.ctrl.pc_sel === PC_ALU || brCond.io.taken, alu.io.sum >> 1.U << 1.U,
              Mux(io.ctrl.pc_sel === PC_0, pc, pc + 4.U)))))
   val inst = Mux(started || io.ctrl.inst_kill || brCond.io.taken || csr.io.expt, Instructions.NOP, io.icache.resp.bits.data)
-  pc                      := npc 
+  pc                      := npc
   io.icache.req.bits.addr := npc
   io.icache.req.bits.data := 0.U
   io.icache.req.bits.mask := 0.U
   io.icache.req.valid     := !stall
   io.icache.abort         := false.B
- 
+
   // Pipelining
   when (!stall) {
     fe_pc   := pc
@@ -72,6 +73,7 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   /****** Execute *****/
   // Decode
   io.ctrl.inst  := fe_inst
+  instCounts.io.inst := fe_inst
 
   // regFile read
   val rd_addr  = fe_inst(11, 7)
@@ -88,16 +90,16 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val wb_rd_addr = ew_inst(11, 7)
   val rs1hazard = wb_en && rs1_addr.orR && (rs1_addr === wb_rd_addr)
   val rs2hazard = wb_en && rs2_addr.orR && (rs2_addr === wb_rd_addr)
-  val rs1 = Mux(wb_sel === WB_ALU && rs1hazard, ew_alu, regFile.io.rdata1) 
+  val rs1 = Mux(wb_sel === WB_ALU && rs1hazard, ew_alu, regFile.io.rdata1)
   val rs2 = Mux(wb_sel === WB_ALU && rs2hazard, ew_alu, regFile.io.rdata2)
- 
+
   // ALU operations
   alu.io.A := Mux(io.ctrl.A_sel === A_RS1, rs1, fe_pc)
   alu.io.B := Mux(io.ctrl.B_sel === B_RS2, rs2, immGen.io.out)
   alu.io.alu_op := io.ctrl.alu_op
 
   // Branch condition calc
-  brCond.io.rs1 := rs1 
+  brCond.io.rs1 := rs1
   brCond.io.rs2 := rs2
   brCond.io.br_type := io.ctrl.br_type
 
@@ -105,14 +107,14 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val daddr   = Mux(stall, ew_alu, alu.io.sum) >> 2.U << 2.U
   val woffset = alu.io.sum(1) << 4.U | alu.io.sum(0) << 3.U
   io.dcache.req.valid     := !stall && (io.ctrl.st_type.orR || io.ctrl.ld_type.orR)
-  io.dcache.req.bits.addr := daddr 
+  io.dcache.req.bits.addr := daddr
   io.dcache.req.bits.data := rs2 << woffset
-  io.dcache.req.bits.mask := MuxLookup(Mux(stall, st_type, io.ctrl.st_type), 
+  io.dcache.req.bits.mask := MuxLookup(Mux(stall, st_type, io.ctrl.st_type),
               "b0000".U, Seq(
     ST_SW ->  "b1111".U,
     ST_SH -> ("b11".U << alu.io.sum(1,0)),
     ST_SB -> ("b1".U  << alu.io.sum(1,0))))
-  
+
   // Pipelining
   when(reset.toBool || !stall && csr.io.expt) {
     st_type   := 0.U
@@ -141,7 +143,7 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   val load    = MuxLookup(ld_type, io.dcache.resp.bits.data.zext, Seq(
     LD_LH  -> lshift(15, 0).asSInt, LD_LB  -> lshift(7, 0).asSInt,
     LD_LHU -> lshift(15, 0).zext,   LD_LBU -> lshift(7, 0).zext) )
-    
+
   // CSR access
   csr.io.stall    := stall
   csr.io.in       := csr_in
@@ -153,15 +155,15 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   csr.io.pc_check := pc_check
   csr.io.ld_type  := ld_type
   csr.io.st_type  := st_type
-  io.host <> csr.io.host 
+  io.host <> csr.io.host
 
   // Regfile Write
   val regWrite = MuxLookup(wb_sel, ew_alu.zext, Seq(
     WB_MEM -> load,
     WB_PC4 -> (ew_pc + 4.U).zext,
-    WB_CSR -> csr.io.out.zext) ).asUInt 
+    WB_CSR -> csr.io.out.zext) ).asUInt
 
-  regFile.io.wen   := wb_en && !stall && !csr.io.expt 
+  regFile.io.wen   := wb_en && !stall && !csr.io.expt
   regFile.io.waddr := wb_rd_addr
   regFile.io.wdata := regWrite
 
