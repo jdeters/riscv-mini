@@ -73,7 +73,7 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
   /****** Execute *****/
   // Decode
   io.ctrl.inst  := fe_inst
-  instCounts.io.inst := fe_inst
+  //instCounts.io.inst := fe_inst
 
   // regFile read
   val rd_addr  = fe_inst(11, 7)
@@ -169,6 +169,8 @@ class Datapath(implicit val p: Parameters) extends Module with CoreParams {
 
   // Abort store when there's an excpetion
   io.dcache.abort := csr.io.expt
+
+  instCounts.io.inst := ew_inst
 
   if (p(Trace)) {
     printf("PC: %x, INST: %x, REG[%d] <- %x\n", ew_pc, ew_inst,
