@@ -108,9 +108,10 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val cycleh   = RegInit(0.U(xlen.W))
   val instret  = RegInit(0.U(xlen.W))
   val instreth = RegInit(0.U(xlen.W))
+  val instCounts = Module(new InstructionCounters)
 
   val mcpuid  = Cat(0.U(2.W) /* RV32I */, 0.U((xlen-28).W),
-                    (1 << ('I' - 'A') /* Base ISA */| 
+                    (1 << ('I' - 'A') /* Base ISA */|
                      1 << ('U' - 'A') /* User Mode */).U(26.W))
   val mimpid  = 0.U(xlen.W) // not implemented
   val mhartid = 0.U(xlen.W) // only one hart
@@ -135,7 +136,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val mstatus = Cat(SD, 0.U((xlen-23).W), VM, MPRV, XS, FS, PRV3, IE3, PRV2, IE2, PRV1, IE1, PRV, IE)
   val mtvec   = Const.PC_EVEC.U(xlen.W)
   val mtdeleg = 0x0.U(xlen.W)
-  
+
   // interrupt registers
   val MTIP = RegInit(false.B)
   val HTIP = false.B
@@ -152,7 +153,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val mip = Cat(0.U((xlen-8).W), MTIP, HTIP, STIP, false.B, MSIP, HSIP, SSIP, false.B)
   val mie = Cat(0.U((xlen-8).W), MTIE, HTIE, STIE, false.B, MSIE, HSIE, SSIE, false.B)
 
-  val mtimecmp = Reg(UInt(xlen.W)) 
+  val mtimecmp = Reg(UInt(xlen.W))
 
   val mscratch = Reg(UInt(xlen.W))
 
@@ -199,6 +200,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
     BitPat(CSR.mstatus)   -> mstatus
   )
 
+  //TODO: Lookup is likely to be deprecated
   io.out := Lookup(csr_addr, 0.U, csrFile).asUInt
 
   val privValid = csr_addr(9, 8) <= PRV
@@ -208,7 +210,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val isEret    = privInst && !csr_addr(0) &&  csr_addr(8)
   val csrValid  = csrFile map (_._1 === csr_addr) reduce (_ || _)
   val csrRO     = csr_addr(11, 10).andR || csr_addr === CSR.mtvec || csr_addr === CSR.mtdeleg
-  val wen       = io.cmd === CSR.W || io.cmd(1) && rs1_addr.orR 
+  val wen       = io.cmd === CSR.W || io.cmd(1) && rs1_addr.orR
   val wdata     = MuxLookup(io.cmd, 0.U, Seq(
     CSR.W -> io.in,
     CSR.S -> (io.out | io.in),
@@ -220,7 +222,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val saddrInvalid = MuxLookup(io.st_type, false.B, Seq(
     Control.ST_SW -> io.addr(1, 0).orR, Control.ST_SH -> io.addr(0)))
   io.expt := io.illegal || iaddrInvalid || laddrInvalid || saddrInvalid ||
-             io.cmd(1, 0).orR && (!csrValid || !privValid) || wen && csrRO || 
+             io.cmd(1, 0).orR && (!csrValid || !privValid) || wen && csrRO ||
              (privInst && !privValid) || isEcall || isEbreak
   io.evec := mtvec + (PRV << 6)
   io.epc  := mepc
@@ -231,7 +233,12 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   cycle := cycle + 1.U
   when(cycle.andR) { cycleh := cycleh + 1.U }
   val isInstRet = io.inst =/= Instructions.NOP && (!io.expt || isEcall || isEbreak) && !io.stall
-  when(isInstRet) { instret := instret + 1.U }
+  when(isInstRet) {
+    instret := instret + 1.U
+    instCounts.io.inst := io.inst
+  } .otherwise {
+    instCounts.io.inst := Instructions.NOP
+  }
   when(isInstRet && instret.andR) { instreth := instreth + 1.U }
 
   when(!io.stall) {
@@ -253,7 +260,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
       PRV1 := CSR.PRV_U
       IE1  := true.B
     }.elsewhen(wen) {
-      when(csr_addr === CSR.mstatus) { 
+      when(csr_addr === CSR.mstatus) {
         PRV1 := wdata(5, 4)
         IE1  := wdata(3)
         PRV  := wdata(2, 1)

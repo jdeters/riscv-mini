@@ -11,6 +11,7 @@ class InstructionCountersIO(implicit p: Parameters) extends CoreBundle()(p) {
 class InstructionCounters (implicit val p: Parameters) extends Module with CoreParams{
   val io = IO(new InstructionCountersIO)
 
+  //TODO: make this a global param
   val instructionCount = 49
 
   //create a new set of resetable registers that always go back to 0
