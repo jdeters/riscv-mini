@@ -22,6 +22,7 @@ object CSR {
   val cycle    = 0xc00.U(12.W)
   val time     = 0xc01.U(12.W)
   val instret  = 0xc02.U(12.W)
+  val instCountReset = 0xc03.U(12.W)
   val cycleh   = 0xc80.U(12.W)
   val timeh    = 0xc81.U(12.W)
   val instreth = 0xc82.U(12.W)
@@ -59,7 +60,7 @@ object CSR {
   val mfromhost = 0x781.U(12.W)
 
   val regs = List(
-    cycle, time, instret, cycleh, timeh, instreth,
+    cycle, time, instret, cycleh, timeh, instreth, instCountReset,
     cyclew, timew, instretw, cyclehw, timehw, instrethw,
     mcpuid, mimpid, mhartid, mtvec, mtdeleg, mie,
     mtimecmp, mtime, mtimeh, mscratch, mepc, mcause, mbadaddr, mip,
@@ -108,6 +109,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   val cycleh   = RegInit(0.U(xlen.W))
   val instret  = RegInit(0.U(xlen.W))
   val instreth = RegInit(0.U(xlen.W))
+  val instCountReset = RegInit(0.U(xlen.W))
   val instCounts = Module(new InstructionCounters)
 
   val mcpuid  = Cat(0.U(2.W) /* RV32I */, 0.U((xlen-28).W),
@@ -172,6 +174,7 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
     BitPat(CSR.cycle)     -> cycle,
     BitPat(CSR.time)      -> time,
     BitPat(CSR.instret)   -> instret,
+    BitPat(CSR.instCountReset) -> instCountReset,
     BitPat(CSR.cycleh)    -> cycleh,
     BitPat(CSR.timeh)     -> timeh,
     BitPat(CSR.instreth)  -> instreth,
@@ -228,6 +231,8 @@ class CSR(implicit val p: Parameters) extends Module with CoreParams {
   io.epc  := mepc
 
   // Counters
+  //when all the bits are set, fire a reset to the counters
+  when(instCountReset.andR) { instCounts.reset := true.B }
   time := time + 1.U
   when(time.andR) { timeh := timeh + 1.U }
   cycle := cycle + 1.U
